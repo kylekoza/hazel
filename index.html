@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Hazel's Rainbow Flutter</title>
+<style>
+  :root {
+    --hud: #fff;
+    --accent: #ff6b9d;
+    --warn: #845ef7;
+    --ink: #4a2d8f;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: #b197fc;
+    overflow: hidden;
+    font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    touch-action: none;
+  }
+  #wrap {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  canvas { display: block; cursor: none; }
+
+  /* Overlays (start / game over / level) */
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 18px;
+    background: rgba(110, 70, 190, 0.55);
+    backdrop-filter: blur(2px);
+    text-align: center;
+    color: var(--hud);
+    z-index: 10;
+  }
+  .overlay.hidden { display: none; }
+  .title {
+    font-size: clamp(40px, 10vw, 100px);
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    color: #fff;
+    text-shadow: 0 4px 0 #e64980, 0 8px 24px rgba(60,20,110,0.5);
+  }
+  .title .dot { color: #ffe066; }
+  .sub { font-size: clamp(14px, 2.6vw, 19px); opacity: 0.95; max-width: 34ch; line-height: 1.5; }
+  .stat { font-size: clamp(20px, 4vw, 30px); font-weight: 700; }
+  .stat b { color: #ffe066; }
+  .best { font-size: clamp(13px, 2.2vw, 16px); opacity: 0.85; }
+  .best b { color: #ffe066; }
+  button {
+    margin-top: 6px;
+    font: inherit; font-weight: 800; font-size: 20px;
+    color: #fff; background: var(--accent);
+    border: none; border-radius: 999px;
+    padding: 14px 38px; cursor: pointer;
+    box-shadow: 0 6px 0 #d6336c;
+    transition: transform .06s ease, box-shadow .06s ease;
+  }
+  button:hover { transform: translateY(2px); box-shadow: 0 4px 0 #d6336c; }
+  button:active { transform: translateY(6px); box-shadow: 0 0 0 #d6336c; }
+  .keys { font-size: 13px; opacity: 0.75; line-height: 1.6; }
+  .keys b { color: #ffe066; opacity: 0.95; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+
+  <div id="start" class="overlay">
+    <div class="title">Hazel's Rainbow Flutter<span class="dot">!</span></div>
+    <div class="sub">🦋 You're a butterfly! Catch little rainbows to grow your wings. Watch out for grumpy storm clouds and rainbows bigger than you. Fill the whole sky with color to clear the level!</div>
+    <button id="startBtn">Start fluttering</button>
+    <div class="best">Best score <b id="bestStart">0</b></div>
+    <div class="keys">Fly with your <b>mouse</b> · or <b>arrow keys / WASD</b><br><b>Space</b> or <b>click</b> for a sparkle dash · <b>P</b> to pause</div>
+  </div>
+
+  <div id="over" class="overlay hidden">
+    <div class="title" style="font-size:clamp(36px,9vw,84px)">Oh no<span class="dot">!</span></div>
+    <div class="stat">Score <b id="finalScore">0</b></div>
+    <div class="best" id="overBest"></div>
+    <div class="sub" id="overMsg"></div>
+    <button id="againBtn">Fly again</button>
+  </div>
+
+  <div id="won" class="overlay hidden">
+    <div class="title" style="font-size:clamp(34px,8vw,76px)">Level <span id="wonLevel">1</span> clear<span class="dot">!</span></div>
+    <div class="stat">Score <b id="wonScore">0</b></div>
+    <div class="sub" id="wonMsg">You filled the whole sky with color! Ready to fly even higher?</div>
+    <button id="nextBtn">Fly higher</button>
+  </div>
+
+  <div id="paused" class="overlay hidden">
+    <div class="title" style="font-size:clamp(36px,9vw,84px)">Paused</div>
+    <div class="sub">Rest your wings.</div>
+    <button id="resumeBtn">Resume</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const startScreen = document.getElementById("start");
+  const overScreen  = document.getElementById("over");
+  const wonScreen   = document.getElementById("won");
+  const pausedScreen = document.getElementById("paused");
+  const startBtn = document.getElementById("startBtn");
+  const againBtn = document.getElementById("againBtn");
+  const nextBtn  = document.getElementById("nextBtn");
+  const resumeBtn = document.getElementById("resumeBtn");
+  const finalScoreEl = document.getElementById("finalScore");
+  const overMsgEl = document.getElementById("overMsg");
+  const overBestEl = document.getElementById("overBest");
+  const bestStartEl = document.getElementById("bestStart");
+  const wonLevelEl = document.getElementById("wonLevel");
+  const wonScoreEl = document.getElementById("wonScore");
+
+  // ---- Display / sizing -------------------------------------------------
+  let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pick = arr => arr[(Math.random() * arr.length) | 0];
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+  // The player clears the level only once it has outgrown the whole screen —
+  // its body alone overflows the shorter dimension, wings and all.
+  function goalSizeFor() { return Math.min(W, H) * 0.55; }
+
+  // ---- High score (persisted) -------------------------------------------
+  let best = 0;
+  try { best = parseInt(localStorage.getItem("flutter.best") || "0", 10) || 0; } catch (e) {}
+  function saveBest(score) {
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem("flutter.best", String(best)); } catch (e) {}
+      return true;
+    }
+    return false;
+  }
+  bestStartEl.textContent = best;
+
+  // ---- Audio (procedural, WebAudio) -------------------------------------
+  let actx = null;
+  function audio() {
+    if (!actx) {
+      try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    }
+    if (actx && actx.state === "suspended") actx.resume();
+    return actx;
+  }
+  function blip(freq, dur, vol, type, slideTo) {
+    const a = audio();
+    if (!a) return;
+    const t0 = a.currentTime;
+    const osc = a.createOscillator();
+    const gain = a.createGain();
+    osc.type = type || "sine";
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t0 + dur);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(vol, t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(gain).connect(a.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+  function sndChomp(preyFrac, combo) {
+    // smaller prey -> higher pitch; higher combo -> nudged up further
+    const base = 220 + (1 - clamp(preyFrac, 0, 1)) * 360 + Math.min(combo, 8) * 28;
+    blip(base, 0.12, 0.18, "triangle", base * 1.7);
+  }
+  function sndLevel() {
+    blip(523, 0.10, 0.16, "square", 523);
+    setTimeout(() => blip(784, 0.16, 0.16, "square", 784), 90);
+  }
+  function sndWin() {
+    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.18, 0.16, "square", f), i * 110));
+  }
+  function sndDeath() { blip(300, 0.5, 0.22, "sawtooth", 60); }
+  function sndDash() { blip(180, 0.18, 0.12, "sine", 420); }
+
+  // ---- Input ------------------------------------------------------------
+  // controlMode tracks which device most recently expressed intent, so that
+  // releasing the keyboard doesn't yank the butterfly back toward a stale pointer.
+  const pointer = { x: W / 2, y: H / 2 };
+  const keys = {};
+  let controlMode = "mouse"; // "mouse" | "keys"
+  let dashQueued = false;
+  const MOVE_KEYS = ["arrowup","arrowdown","arrowleft","arrowright","w","a","s","d"];
+
+  window.addEventListener("mousemove", e => {
+    pointer.x = e.clientX; pointer.y = e.clientY; controlMode = "mouse";
+  });
+  window.addEventListener("mousedown", () => { if (running && !paused) dashQueued = true; });
+  window.addEventListener("touchmove", e => {
+    const t = e.touches[0];
+    if (t) { pointer.x = t.clientX; pointer.y = t.clientY; controlMode = "mouse"; }
+  }, { passive: true });
+  window.addEventListener("touchstart", e => {
+    const t = e.touches[0];
+    if (t) { pointer.x = t.clientX; pointer.y = t.clientY; controlMode = "mouse"; if (running && !paused) dashQueued = true; }
+  }, { passive: true });
+  window.addEventListener("keydown", e => {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+    if (["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k)) e.preventDefault();
+    if (MOVE_KEYS.includes(k)) controlMode = "keys";
+    if (k === " " && running && !paused) dashQueued = true;
+    if (k === "p" && running) togglePause();
+  });
+  window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+  // ---- Rainbow palette ----------------------------------------------------
+  const RAINBOW = ["#ff5e6c", "#ffa94d", "#ffe066", "#8ce99a", "#74c0fc", "#b197fc"];
+
+  // ---- Species ----------------------------------------------------------
+  // drifter  : rainbow that floats straight across (classic neutral critter)
+  // schooler : small rainbows that spawn in tight groups — easy combo fodder
+  // darter   : shy little rainbow that bolts away when the player gets close
+  // hunter   : grumpy storm cloud that tracks the player's height
+  const SPECIES = {
+    drifter:  { colors: RAINBOW },
+    schooler: { colors: RAINBOW },
+    darter:   { colors: RAINBOW },
+    hunter:   { colors: ["#748ffc", "#845ef7", "#5c7cfa", "#7048e8"] }
+  };
+
+  function makeFish(size, x, y, dir, color, speed, species) {
+    return {
+      x, y, size,
+      dir,
+      vy: rand(-12, 12),
+      color,
+      speed,
+      species: species || "drifter",
+      fear: 0,                     // darter flee intensity (0..1)
+      homeSpeed: rand(55, 95),     // hunter vertical tracking speed
+      wobble: Math.random() * Math.PI * 2,
+      wobbleSpeed: rand(2, 4),
+      alive: true
+    };
+  }
+
+  // Build a spawn wave (usually one critter; a cluster for schoolers) entering
+  // from one side. Sizing & species mix scale with the level.
+  function spawnWave(player, level) {
+    const out = [];
+    const fromLeft = Math.random() < 0.5;
+    const dir = fromLeft ? 1 : -1;
+    const edgeX = (s) => fromLeft ? -s * 2 : W + s * 2;
+
+    // species mix — more storm clouds the higher you fly
+    const pHunter = clamp(0.16 + level * 0.045, 0.16, 0.5);
+    const r = Math.random();
+    let species;
+    if (r < pHunter)            species = "hunter";
+    else if (r < pHunter + 0.18) species = "darter";
+    else if (r < pHunter + 0.32) species = "schooler";
+    else                         species = "drifter";
+
+    const speedMul = 1 + (level - 1) * 0.14;
+
+    if (species === "schooler") {
+      const n = 3 + (Math.random() * 4 | 0);
+      const size = clamp(rand(6, player.size * 0.5), 5, 60);
+      const cy = rand(size * 3, H - size * 3);
+      const speed = rand(60, 100) * speedMul;
+      for (let i = 0; i < n; i++) {
+        const f = makeFish(size * rand(0.85, 1.15), edgeX(size) - dir * i * size * 2.2,
+                           clamp(cy + rand(-size * 2.5, size * 2.5), size, H - size),
+                           dir, pick(SPECIES.schooler.colors), speed, "schooler");
+        out.push(f);
+      }
+      return out;
+    }
+
+    let size, speed;
+    if (species === "hunter") {
+      size = clamp(player.size * rand(1.15, 2.0), 12, Math.max(W, H) * 0.2);
+      speed = rand(45, 85) * speedMul;
+    } else if (species === "darter") {
+      size = clamp(rand(6, player.size * 0.7), 5, player.size * 0.9);
+      speed = rand(60, 105) * speedMul;
+    } else {
+      // drifter — biased mix of prey & threat (leaner on easy prey than before)
+      const rr = Math.random();
+      if (rr < 0.48)      size = rand(6, player.size * 0.85);
+      else if (rr < 0.78) size = rand(player.size * 0.9, player.size * 1.6);
+      else                size = rand(player.size * 1.6, player.size * 2.8 + 14);
+      size = clamp(size, 5, Math.max(W, H) * 0.2);
+      speed = rand(45, 100) * (1 + 14 / size) * 0.5 * speedMul;
+    }
+
+    const y = rand(size, H - size);
+    out.push(makeFish(size, edgeX(size), y, dir, pick(SPECIES[species].colors), speed, species));
+    return out;
+  }
+
+  // ---- Sparkles (ambient) -------------------------------------------------
+  const sparkles = [];
+  function seedSparkles() {
+    sparkles.length = 0;
+    for (let i = 0; i < 40; i++) {
+      sparkles.push({ x: rand(0, W), y: rand(0, H), r: rand(1, 3.5), spd: rand(15, 45), tw: rand(0, Math.PI * 2) });
+    }
+  }
+
+  // ---- Particles --------------------------------------------------------
+  let particles = [];
+  function burst(x, y, color, count, power) {
+    for (let i = 0; i < count; i++) {
+      const a = rand(0, Math.PI * 2);
+      const sp = rand(0.3, 1) * power;
+      particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        r: rand(2, 5), color: color || pick(RAINBOW), life: 1, decay: rand(1.6, 2.8)
+      });
+    }
+  }
+  function rainbowBurst(x, y, count, power) {
+    for (const c of RAINBOW) burst(x, y, c, Math.ceil(count / RAINBOW.length), power);
+  }
+  function updateParticles(dt) {
+    for (const p of particles) {
+      p.x += p.vx * dt * 60;
+      p.y += p.vy * dt * 60;
+      p.vx *= 0.92;
+      p.vy = p.vy * 0.92 + 18 * dt;
+      p.life -= p.decay * dt;
+    }
+    particles = particles.filter(p => p.life > 0);
+  }
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = clamp(p.life, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---- Screen shake -----------------------------------------------------
+  let shake = 0;
+  function addShake(amount) { shake = Math.min(shake + amount, 24); }
+
+  // ---- Drawing ----------------------------------------------------------
+  function dangerRing(s, t) {
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.3 * Math.sin(t * 6);
+    ctx.strokeStyle = "#845ef7";
+    ctx.lineWidth = Math.max(2, s * 0.08);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s * 1.25, s * 0.95, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function cloudPuff(x, y, r, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x - r * 0.9, y, r * 0.7, 0, Math.PI * 2);
+    ctx.arc(x, y - r * 0.35, r * 0.85, 0, Math.PI * 2);
+    ctx.arc(x + r * 0.9, y, r * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Little arched rainbow with fluffy cloud feet. `bob` keeps it floating gently.
+  function drawRainbow(f, t, opts) {
+    opts = opts || {};
+    const s = f.size * (f.pop || 1);
+    const bob = Math.sin(f.wobble) * s * 0.08;
+    ctx.save();
+    ctx.translate(f.x, f.y + bob);
+
+    if (opts.danger) dangerRing(s, t);
+
+    const bw = Math.max(1.2, s * 0.15);
+    ctx.lineCap = "butt";
+    for (let i = 0; i < RAINBOW.length; i++) {
+      ctx.strokeStyle = RAINBOW[i];
+      ctx.lineWidth = bw;
+      ctx.beginPath();
+      ctx.arc(0, s * 0.45, Math.max(0.5, s - (i + 0.5) * bw), Math.PI, Math.PI * 2);
+      ctx.stroke();
+    }
+    cloudPuff(-s + bw * 2, s * 0.42, s * 0.3, "rgba(255,255,255,0.95)");
+    cloudPuff( s - bw * 2, s * 0.42, s * 0.3, "rgba(255,255,255,0.95)");
+    ctx.restore();
+  }
+
+  // Grumpy storm cloud — the only critter that hunts the butterfly.
+  function drawCloud(f, t, opts) {
+    opts = opts || {};
+    const s = f.size * (f.pop || 1);
+    const bob = Math.sin(f.wobble) * s * 0.06;
+    ctx.save();
+    ctx.translate(f.x, f.y + bob);
+    ctx.scale(f.dir, 1);
+
+    if (opts.danger) dangerRing(s, t);
+
+    // puffy body
+    ctx.fillStyle = f.color;
+    ctx.beginPath();
+    ctx.arc(-s * 0.6,  s * 0.05, s * 0.5,  0, Math.PI * 2);
+    ctx.arc(0,        -s * 0.25, s * 0.62, 0, Math.PI * 2);
+    ctx.arc(s * 0.55,  s * 0.05, s * 0.5,  0, Math.PI * 2);
+    ctx.ellipse(0, s * 0.2, s * 0.95, s * 0.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // darker underside
+    ctx.fillStyle = "rgba(40,20,80,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(0, s * 0.4, s * 0.85, s * 0.28, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // grumpy eyes + brows
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc( s * 0.28, -s * 0.12, s * 0.16, 0, Math.PI * 2);
+    ctx.arc(-s * 0.12, -s * 0.12, s * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#2b1a4d";
+    ctx.beginPath();
+    ctx.arc( s * 0.33, -s * 0.1, s * 0.08, 0, Math.PI * 2);
+    ctx.arc(-s * 0.07, -s * 0.1, s * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#2b1a4d";
+    ctx.lineWidth = Math.max(1.5, s * 0.07);
+    ctx.beginPath();
+    ctx.moveTo( s * 0.14, -s * 0.34); ctx.lineTo( s * 0.44, -s * 0.24);
+    ctx.moveTo( s * 0.02, -s * 0.34); ctx.lineTo(-s * 0.28, -s * 0.24);
+    ctx.stroke();
+    // frown
+    ctx.beginPath();
+    ctx.arc(s * 0.1, s * 0.28, s * 0.16, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.stroke();
+
+    // flickering lightning bolt
+    if (Math.sin(t * 5 + f.wobble) > 0.2) {
+      ctx.fillStyle = "#ffe066";
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.05, s * 0.5);
+      ctx.lineTo(-s * 0.28, s * 0.85);
+      ctx.lineTo(-s * 0.1,  s * 0.85);
+      ctx.lineTo(-s * 0.3,  s * 1.2);
+      ctx.lineTo( s * 0.08, s * 0.78);
+      ctx.lineTo(-s * 0.1,  s * 0.78);
+      ctx.lineTo( s * 0.12, s * 0.5);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // The player: a butterfly with flapping rainbow polka-dot wings.
+  function drawButterfly(f, t) {
+    const s = f.size * (f.pop || 1);
+    const flap = 0.35 + Math.abs(Math.sin(f.wobble * 2.2)) * 0.75;
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.scale(f.dir, 1);
+
+    for (const side of [-1, 1]) {
+      ctx.save();
+      ctx.scale(1, side * flap);
+      // big forewing
+      ctx.fillStyle = "#ff6b9d";
+      ctx.beginPath();
+      ctx.ellipse(s * 0.05, -s * 0.8, s * 0.72, s * 0.95, -0.45, 0, Math.PI * 2);
+      ctx.fill();
+      // smaller hindwing
+      ctx.fillStyle = "#b197fc";
+      ctx.beginPath();
+      ctx.ellipse(-s * 0.6, -s * 0.55, s * 0.5, s * 0.6, 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      // rainbow polka dots on the forewing
+      const dots = [["#ffe066", 0.28], ["#8ce99a", 0.17], ["#74c0fc", 0.12]];
+      const dpos = [[0.18, -1.05], [-0.12, -0.62], [0.38, -0.5]];
+      for (let i = 0; i < dots.length; i++) {
+        ctx.fillStyle = dots[i][0];
+        ctx.beginPath();
+        ctx.arc(s * dpos[i][0], s * dpos[i][1], s * dots[i][1], 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // wing edge
+      ctx.strokeStyle = "rgba(74,45,143,0.55)";
+      ctx.lineWidth = Math.max(1, s * 0.05);
+      ctx.beginPath();
+      ctx.ellipse(s * 0.05, -s * 0.8, s * 0.72, s * 0.95, -0.45, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // body
+    ctx.fillStyle = "#5f3dc4";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s * 0.8, s * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // head
+    ctx.beginPath();
+    ctx.arc(s * 0.85, 0, s * 0.26, 0, Math.PI * 2);
+    ctx.fill();
+    // eye
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(s * 0.92, -s * 0.06, s * 0.11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#2b1a4d";
+    ctx.beginPath();
+    ctx.arc(s * 0.95, -s * 0.06, s * 0.055, 0, Math.PI * 2);
+    ctx.fill();
+    // antennae
+    ctx.strokeStyle = "#5f3dc4";
+    ctx.lineWidth = Math.max(1, s * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.95, -s * 0.2);
+    ctx.quadraticCurveTo(s * 1.25, -s * 0.55, s * 1.45, -s * 0.5);
+    ctx.moveTo(s * 1.0, -s * 0.14);
+    ctx.quadraticCurveTo(s * 1.35, -s * 0.35, s * 1.55, -s * 0.22);
+    ctx.stroke();
+    ctx.fillStyle = "#5f3dc4";
+    ctx.beginPath();
+    ctx.arc(s * 1.45, -s * 0.5, s * 0.07, 0, Math.PI * 2);
+    ctx.arc(s * 1.55, -s * 0.22, s * 0.07, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawCreature(f, t, opts) {
+    if (f.species === "player") drawButterfly(f, t);
+    else if (f.species === "hunter") drawCloud(f, t, opts);
+    else drawRainbow(f, t, opts);
+  }
+
+  function drawBackground(t) {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#74c0fc");
+    g.addColorStop(0.55, "#b197fc");
+    g.addColorStop(1, "#ffc9de");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // soft sun rays
+    ctx.save();
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = "#fff9db";
+    for (let i = 0; i < 4; i++) {
+      const x = (i + 0.5) * (W / 4);
+      ctx.beginPath();
+      ctx.moveTo(x - 40, 0);
+      ctx.lineTo(x + 40, 0);
+      ctx.lineTo(x + 160, H);
+      ctx.lineTo(x - 160, H);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // drifting sparkles
+    for (const sp of sparkles) {
+      const tw = 0.35 + 0.3 * Math.sin((t || 0) * 3 + sp.tw);
+      ctx.fillStyle = "rgba(255,255,255," + tw.toFixed(3) + ")";
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, sp.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawThreatVignette(intensity) {
+    if (intensity <= 0.01) return;
+    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.7);
+    g.addColorStop(0, "rgba(70,40,130,0)");
+    g.addColorStop(1, "rgba(70,40,130," + (0.5 * intensity).toFixed(3) + ")");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawHUD() {
+    ctx.save();
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "rgba(74,45,143,0.95)";
+    ctx.font = "800 26px 'Trebuchet MS', system-ui, sans-serif";
+    ctx.fillText("Score " + Math.floor(game.score), 20, 18);
+
+    // level + growth-toward-filling-the-sky
+    ctx.font = "800 16px 'Trebuchet MS', system-ui, sans-serif";
+    ctx.fillStyle = "rgba(74,45,143,0.8)";
+    ctx.fillText("Level " + game.level, 20, 50);
+
+    const meterW = 180, meterH = 10, mx = 20, my = 72;
+    const frac = clamp((player.size - START_SIZE) / (game.goalSize - START_SIZE), 0, 1);
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    roundRect(mx, my, meterW, meterH, 5); ctx.fill();
+    const mg = ctx.createLinearGradient(mx, 0, mx + meterW, 0);
+    RAINBOW.forEach((c, i) => mg.addColorStop(i / (RAINBOW.length - 1), c));
+    ctx.fillStyle = mg;
+    roundRect(mx, my, meterW * frac, meterH, 5); ctx.fill();
+
+    // best (top-right)
+    ctx.textAlign = "right";
+    ctx.font = "800 16px 'Trebuchet MS', system-ui, sans-serif";
+    ctx.fillStyle = "rgba(230,73,128,0.95)";
+    ctx.fillText("Best " + Math.max(best, Math.floor(game.score)), W - 20, 22);
+
+    // dash cooldown pip (bottom-left)
+    ctx.textAlign = "left";
+    const dashReady = player.dashCd <= 0;
+    ctx.fillStyle = dashReady ? "rgba(230,73,128,0.95)" : "rgba(74,45,143,0.4)";
+    ctx.font = "800 14px 'Trebuchet MS', system-ui, sans-serif";
+    ctx.fillText(dashReady ? "✨ SPARKLE DASH READY" : "✨ recharging…", 20, H - 32);
+
+    // combo (top-center) — grows & drains while you chain catches
+    if (game.combo >= 2) {
+      ctx.textAlign = "center";
+      const mult = comboMult(game.combo);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#e64980";
+      ctx.font = "800 clamp(22px, 5vw, 40px) 'Trebuchet MS', system-ui, sans-serif";
+      ctx.fillText("COMBO x" + game.combo + "  (×" + mult.toFixed(1) + ")", W / 2, 22);
+      const cw = 160, ch = 7, cx = W / 2 - cw / 2, cy = 64;
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
+      roundRect(cx, cy, cw, ch, 4); ctx.fill();
+      ctx.fillStyle = "#e64980";
+      roundRect(cx, cy, cw * clamp(game.comboTimer / COMBO_WINDOW, 0, 1), ch, 4); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // level-up flash
+    if (game.levelFlash > 0) {
+      ctx.globalAlpha = clamp(game.levelFlash, 0, 1);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#e64980";
+      ctx.font = "800 clamp(24px, 6vw, 56px) 'Trebuchet MS', system-ui, sans-serif";
+      ctx.fillText(game.flashText, W / 2, H * 0.32);
+      ctx.globalAlpha = 1;
+    }
+
+    // discreet controls hint — fades out over the first few seconds of a run
+    if (game.hint > 0) {
+      ctx.globalAlpha = clamp(game.hint, 0, 1) * 0.7;
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(74,45,143,1)";
+      ctx.font = "700 14px 'Trebuchet MS', system-ui, sans-serif";
+      ctx.fillText("WASD / arrows / mouse to fly   ·   Space or click to dash   ·   P to pause", W / 2, H - 58);
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // ---- Game state -------------------------------------------------------
+  const START_SIZE = 12;
+  const DASH_SPEED = 900;
+  const DASH_TIME = 0.18;
+  const DASH_COOLDOWN = 1.4;
+  const COMBO_WINDOW = 1.7;       // seconds to chain the next catch
+  const DARTER_FLEE_RANGE = 170;  // px at which shy rainbows start bolting
+  const KEY_ACCEL = 2400;         // keyboard thrust (px/s^2)
+  const KEY_DAMP = 4.5;           // velocity damping -> momentum / glide
+  const KEY_MAX = 470;            // top keyboard speed (px/s)
+  let player, enemies, game, lastT, running = false, paused = false, spawnAcc = 0;
+  let threatLevel = 0;
+
+  function comboMult(combo) { return Math.min(1 + (combo - 1) * 0.5, 6); }
+
+  // Set up one level. Pass keepScore to continue across level transitions.
+  function setupLevel(level, score) {
+    player = makeFish(START_SIZE, W / 2, H / 2, 1, "#ff6b9d", 0, "player");
+    player.pop = 1; player.dashCd = 0; player.dashT = 0;
+    player.dvx = 0; player.dvy = 0; player.vx = 0; player.vy = 0; player.grace = 1.5;
+    enemies = [];
+    game = {
+      score: score, time: 0, level: level, goalSize: goalSizeFor(),
+      combo: 0, comboTimer: 0, levelFlash: 1.0, flashText: "LEVEL " + level,
+      hint: level === 1 ? 5.5 : 0
+    };
+    spawnAcc = 0; threatLevel = 0; particles = []; shake = 0;
+    controlMode = "mouse";
+    pointer.x = W / 2; pointer.y = H / 2;
+    seedSparkles();
+    for (let i = 0; i < 8; i++) {
+      for (const f of spawnWave(player, level)) enemies.push(f);
+    }
+  }
+
+  function startGame() {
+    audio();
+    setupLevel(1, 0);
+    hideOverlays();
+    running = true; paused = false;
+    lastT = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function nextLevel() {
+    audio();
+    setupLevel(game.level + 1, Math.floor(game.score));
+    hideOverlays();
+    running = true; paused = false;
+    lastT = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function hideOverlays() {
+    startScreen.classList.add("hidden");
+    overScreen.classList.add("hidden");
+    wonScreen.classList.add("hidden");
+    pausedScreen.classList.add("hidden");
+  }
+
+  function togglePause() {
+    if (!running) return;
+    paused = !paused;
+    if (paused) {
+      pausedScreen.classList.remove("hidden");
+    } else {
+      pausedScreen.classList.add("hidden");
+      lastT = performance.now();
+      requestAnimationFrame(loop);
+    }
+  }
+
+  function levelComplete() {
+    running = false;
+    game.score += 250 + game.level * 100; // level clear bonus
+    saveBest(Math.floor(game.score));
+    sndWin();
+    addShake(10);
+    rainbowBurst(player.x, player.y, 36, 6);
+    wonLevelEl.textContent = game.level;
+    wonScoreEl.textContent = Math.floor(game.score);
+    wonScreen.classList.remove("hidden");
+  }
+
+  function gameOver() {
+    running = false;
+    sndDeath();
+    addShake(22);
+    burst(player.x, player.y, "#ff6b9d", 26, 6);
+    const finalScore = Math.floor(game.score);
+    finalScoreEl.textContent = finalScore;
+    const isBest = saveBest(finalScore);
+    overBestEl.innerHTML = isBest ? "🏆 New best!" : "Best <b>" + best + "</b>";
+    overMsgEl.textContent = "Something too big bumped you on level " + game.level + ". Flutter back and try again, little butterfly!";
+    overScreen.classList.remove("hidden");
+  }
+
+  // ---- Update -----------------------------------------------------------
+  function update(dt, t) {
+    game.time += dt;
+    game.score += dt * 1.5;
+
+    // timers
+    if (player.grace > 0) player.grace -= dt;
+    if (player.dashCd > 0) player.dashCd -= dt;
+    if (player.dashT > 0) player.dashT -= dt;
+    if (game.levelFlash > 0) game.levelFlash -= dt;
+    if (game.hint > 0) game.hint -= dt;
+    if (player.pop > 1) player.pop = Math.max(1, player.pop - dt * 2.5);
+    if (game.combo > 0) {
+      game.comboTimer -= dt;
+      if (game.comboTimer <= 0) game.combo = 0;
+    }
+
+    // current keyboard intent
+    const kx = (keys["arrowright"] || keys["d"] ? 1 : 0) - (keys["arrowleft"] || keys["a"] ? 1 : 0);
+    const ky = (keys["arrowdown"]  || keys["s"] ? 1 : 0) - (keys["arrowup"]   || keys["w"] ? 1 : 0);
+
+    // --- dash trigger ---
+    if (dashQueued) {
+      dashQueued = false;
+      if (player.dashCd <= 0) {
+        let hx, hy;
+        if (controlMode === "keys") {
+          hx = kx; hy = ky;
+          if (!hx && !hy) { hx = player.dir; hy = 0; }
+        } else {
+          hx = pointer.x - player.x; hy = pointer.y - player.y;
+          if (Math.hypot(hx, hy) < 6) { hx = player.dir; hy = 0; }
+        }
+        const m = Math.hypot(hx, hy) || 1;
+        player.dvx = (hx / m) * DASH_SPEED;
+        player.dvy = (hy / m) * DASH_SPEED;
+        player.dashT = DASH_TIME;
+        player.dashCd = DASH_COOLDOWN;
+        player.dir = (player.dvx >= 0) ? 1 : -1;
+        sndDash();
+        burst(player.x, player.y, "#fff", 8, 3);
+      }
+    }
+
+    // --- player steering ---
+    // In keys mode the butterfly holds position when no key is pressed — no snap-back.
+    if (controlMode === "keys") {
+      // Velocity model: thrust toward the held direction, then damp. The butterfly
+      // carries momentum, eases between headings, and glides to a stop — so it
+      // can travel at any angle instead of snapping to N/S/E/W.
+      if (kx || ky) {
+        const ml = Math.hypot(kx, ky) || 1;
+        player.vx += (kx / ml) * KEY_ACCEL * dt;
+        player.vy += (ky / ml) * KEY_ACCEL * dt;
+      }
+      const damp = Math.exp(-KEY_DAMP * dt);
+      player.vx *= damp; player.vy *= damp;
+      const sp = Math.hypot(player.vx, player.vy);
+      if (sp > KEY_MAX) { player.vx = player.vx / sp * KEY_MAX; player.vy = player.vy / sp * KEY_MAX; }
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+      if (Math.abs(player.vx) > 4) player.dir = player.vx > 0 ? 1 : -1;
+    } else {
+      const dx = pointer.x - player.x, dy = pointer.y - player.y;
+      const ease = 1 - Math.pow(0.0015, dt);
+      player.x += dx * ease;
+      player.y += dy * ease;
+      if (Math.abs(dx) > 2) player.dir = dx > 0 ? 1 : -1;
+    }
+    // dash impulse on top of steering
+    if (player.dashT > 0) {
+      player.x += player.dvx * dt;
+      player.y += player.dvy * dt;
+      player.dvx *= 0.86; player.dvy *= 0.86;
+      if (Math.random() < 0.6) burst(player.x, player.y, pick(RAINBOW), 1, 1.5);
+    }
+    // soft bounce off the walls (only while the butterfly still fits on screen)
+    if (player.size * 2 < W && ((player.x < player.size && player.vx < 0) || (player.x > W - player.size && player.vx > 0))) player.vx *= -0.25;
+    if (player.size * 2 < H && ((player.y < player.size && player.vy < 0) || (player.y > H - player.size && player.vy > 0))) player.vy *= -0.25;
+    // keep the butterfly on screen; once it's wider/taller than the view, pin to center
+    player.x = clamp(player.x, Math.min(player.size, W / 2), Math.max(W - player.size, W / 2));
+    player.y = clamp(player.y, Math.min(player.size, H / 2), Math.max(H - player.size, H / 2));
+    player.wobble += player.wobbleSpeed * dt * 1.5;
+
+    // --- spawn cadence (harder over time and with level) ---
+    spawnAcc += dt;
+    const interval = Math.max(0.22, (0.95 - game.time * 0.005) - game.level * 0.045);
+    if (spawnAcc > interval && enemies.length < 32) {
+      spawnAcc = 0;
+      for (const f of spawnWave(player, game.level)) {
+        if (enemies.length < 34) enemies.push(f);
+      }
+    }
+
+    // --- enemies (species AI) ---
+    let nearestThreat = Infinity;
+    for (const f of enemies) {
+      f.wobble += f.wobbleSpeed * dt;
+
+      if (f.species === "hunter") {
+        // cross horizontally, but track the player's height
+        f.x += f.dir * f.speed * dt;
+        const dy = player.y - f.y;
+        f.y += clamp(dy, -1, 1) * f.homeSpeed * dt + Math.sin(f.wobble) * f.vy * 0.3 * dt;
+      } else if (f.species === "darter") {
+        // bolt away when the (bigger) player gets close
+        const dxp = f.x - player.x, dyp = f.y - player.y;
+        const distp = Math.hypot(dxp, dyp);
+        const threatened = player.size > f.size && distp < DARTER_FLEE_RANGE && player.grace <= 0;
+        f.fear += ((threatened ? 1 : 0) - f.fear) * Math.min(1, dt * 5);
+        const boost = 1 + f.fear * 1.6;
+        f.x += f.dir * f.speed * boost * dt;
+        if (f.fear > 0.05) {
+          f.y += Math.sign(dyp || 1) * f.fear * 140 * dt;
+        } else {
+          f.y += Math.sin(f.wobble) * f.vy * dt;
+        }
+      } else {
+        // drifter / schooler
+        f.x += f.dir * f.speed * dt;
+        f.y += Math.sin(f.wobble) * f.vy * dt;
+      }
+
+      f.y = clamp(f.y, f.size, H - f.size);
+      if ((f.dir > 0 && f.x > W + f.size * 2) || (f.dir < 0 && f.x < -f.size * 2)) {
+        f.alive = false;
+      }
+      if (f.size > player.size * 1.05) {
+        const d = Math.hypot(f.x - player.x, f.y - player.y) - f.size - player.size;
+        if (d < nearestThreat) nearestThreat = d;
+      }
+    }
+    const targetThreat = player.grace > 0 ? 0 : clamp(1 - nearestThreat / 220, 0, 1);
+    threatLevel += (targetThreat - threatLevel) * Math.min(1, dt * 6);
+
+    // --- collisions ---
+    for (const f of enemies) {
+      if (!f.alive) continue;
+      const dx = f.x - player.x, dy = f.y - player.y;
+      const dist = Math.hypot(dx, dy);
+      const overlap = player.size * 0.7 + f.size * 0.7;
+      if (dist < overlap) {
+        if (f.size < player.size * 0.95) {
+          f.alive = false;
+          // combo
+          game.combo += 1;
+          game.comboTimer = COMBO_WINDOW;
+          const mult = comboMult(game.combo);
+          const preyFrac = f.size / player.size;
+          game.score += f.size * mult;
+          sndChomp(preyFrac, game.combo);
+          burst(f.x, f.y, null, 10 + (f.size | 0), 2 + f.size * 0.05);
+          if (game.combo >= 3) burst(f.x, f.y, "#ffe066", 4 + game.combo, 3);
+          player.pop = 1.25;
+          addShake(Math.min(6, 1 + f.size * 0.08));
+          // grow toward the goal size
+          player.size = clamp(player.size + f.size * 0.06, START_SIZE, game.goalSize);
+          if (player.size >= game.goalSize - 0.001) { levelComplete(); return; }
+        } else if (f.size > player.size * 1.05) {
+          if (player.grace <= 0) { gameOver(); return; }
+        }
+      }
+    }
+
+    enemies = enemies.filter(f => f.alive);
+    updateParticles(dt);
+    if (shake > 0) shake = Math.max(0, shake - dt * 40);
+
+    for (const b of sparkles) {
+      b.y -= b.spd * dt;
+      if (b.y < -5) { b.y = H + 5; b.x = rand(0, W); }
+    }
+  }
+
+  // ---- Render -----------------------------------------------------------
+  function render(t) {
+    ctx.save();
+    if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+    drawBackground(t);
+    const sorted = enemies.slice().sort((a, b) => a.size - b.size);
+    for (const f of sorted) {
+      drawCreature(f, t, { danger: f.size > player.size * 1.05 && threatLevel > 0.05 });
+    }
+    drawParticles();
+    if (!(player.grace > 0 && Math.floor(t * 12) % 2 === 0)) drawCreature(player, t);
+    ctx.restore();
+
+    drawThreatVignette(threatLevel);
+    drawHUD();
+  }
+
+  // ---- Main loop --------------------------------------------------------
+  function loop(now) {
+    if (!running || paused) return;
+    let dt = (now - lastT) / 1000;
+    lastT = now;
+    if (dt > 0.05) dt = 0.05;
+    update(dt, now / 1000);
+    if (running && !paused) render(now / 1000);
+    if (running && !paused) requestAnimationFrame(loop);
+  }
+
+  startBtn.addEventListener("click", startGame);
+  againBtn.addEventListener("click", startGame);
+  nextBtn.addEventListener("click", nextLevel);
+  resumeBtn.addEventListener("click", togglePause);
+
+  // static frame behind the start overlay (redrawn on resize, since resizing
+  // the canvas clears it — but only while the start screen is up, so we don't
+  // stomp on live game state)
+  function drawStaticFrame() {
+    setupLevel(1, 0);
+    drawBackground(0);
+    const sorted0 = enemies.slice().sort((a, b) => a.size - b.size);
+    for (const f of sorted0) drawCreature(f, 0);
+    drawCreature(player, 0);
+  }
+  drawStaticFrame();
+  window.addEventListener("resize", () => {
+    if (!running && !startScreen.classList.contains("hidden")) drawStaticFrame();
+  });
+})();
+</script>
+</body>
+</html>
