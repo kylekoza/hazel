@@ -65,6 +65,25 @@
   button:active { transform: translateY(6px); box-shadow: 0 0 0 #d6336c; }
   .keys { font-size: 13px; opacity: 0.75; line-height: 1.6; }
   .keys b { color: #ffe066; opacity: 0.95; }
+
+  .picklabel {
+    font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+    opacity: 0.75; margin-bottom: -6px;
+  }
+  .diff-picker { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .diff {
+    margin-top: 0;
+    font-size: 18px; padding: 12px 24px;
+    color: #fff; background: rgba(255,255,255,0.18);
+    box-shadow: 0 4px 0 rgba(214,51,108,0.35);
+  }
+  .diff:hover { transform: translateY(2px); box-shadow: 0 2px 0 rgba(214,51,108,0.35); }
+  .diff.selected { background: var(--accent); box-shadow: 0 4px 0 #d6336c; }
+  .diff.selected:hover { box-shadow: 0 4px 0 #d6336c; transform: none; }
+  .diff-desc {
+    font-size: clamp(13px, 2.2vw, 16px); opacity: 0.9;
+    max-width: 30ch; line-height: 1.4; min-height: 2.6em;
+  }
 </style>
 </head>
 <body>
@@ -74,6 +93,15 @@
   <div id="start" class="overlay">
     <div class="title">Hazel's Rainbow Flutter<span class="dot">!</span></div>
     <div class="sub">🦋 You're a butterfly! Catch little rainbows to grow your wings. Watch out for grumpy storm clouds and rainbows bigger than you. Fill the whole sky with color to clear the level!</div>
+
+    <div class="picklabel">Choose how tricky</div>
+    <div class="diff-picker" id="diffPicker">
+      <button class="diff" data-diff="easy">🌸 Easy</button>
+      <button class="diff" data-diff="normal">🦋 Normal</button>
+      <button class="diff" data-diff="hard">⛈️ Hard</button>
+    </div>
+    <div class="diff-desc" id="diffDesc"></div>
+
     <button id="startBtn">Start fluttering</button>
     <div class="best">Best score <b id="bestStart">0</b></div>
     <div class="keys">Fly with your <b>mouse</b> · or <b>arrow keys / WASD</b><br><b>Space</b> or <b>click</b> for a sparkle dash · <b>P</b> to pause</div>
@@ -142,15 +170,36 @@
 
   // The player clears the level only once it has outgrown the whole screen —
   // its body alone overflows the shorter dimension, wings and all.
-  function goalSizeFor() { return Math.min(W, H) * 0.55; }
+  function goalSizeFor() { return Math.min(W, H) * D().goal; }
 
-  // ---- High score (persisted) -------------------------------------------
-  let best = 0;
-  try { best = parseInt(localStorage.getItem("flutter.best") || "0", 10) || 0; } catch (e) {}
+  // ---- Difficulty -------------------------------------------------------
+  // Each tier scales the whole game. The original tuning sits between "normal"
+  // and "hard"; "easy" is built for very young players — slow critters, hardly
+  // any storm clouds, fast growth, a long safe spawn, and only much-bigger
+  // things can bump you.
+  const DIFFICULTIES = {
+    easy:   { label: "Easy",   desc: "Gentle and slow — lots of little rainbows and hardly any storm clouds.",
+              enemySpeed: 0.55, hunterBase: 0.03, hunterScale: 0.015, hunterMax: 0.12, hunterTrack: 0.5,
+              preyBias: 0.72, growth: 1.8, goal: 0.38, grace: 3.5, eatRatio: 1.0, dangerRatio: 1.35, spawn: 1.35, seedWaves: 5 },
+    normal: { label: "Normal", desc: "A friendly challenge with a few storm clouds to dodge.",
+              enemySpeed: 0.8, hunterBase: 0.10, hunterScale: 0.03, hunterMax: 0.30, hunterTrack: 0.85,
+              preyBias: 0.58, growth: 1.25, goal: 0.48, grace: 2.2, eatRatio: 0.98, dangerRatio: 1.12, spawn: 1.12, seedWaves: 7 },
+    hard:   { label: "Hard",   desc: "Fast rainbows and lots of grumpy clouds. For big kids!",
+              enemySpeed: 1.1, hunterBase: 0.20, hunterScale: 0.05, hunterMax: 0.55, hunterTrack: 1.15,
+              preyBias: 0.42, growth: 0.9, goal: 0.58, grace: 1.0, eatRatio: 0.92, dangerRatio: 1.03, spawn: 0.9, seedWaves: 9 }
+  };
+  let difficulty = "easy";
+  try { const dd = localStorage.getItem("flutter.diff"); if (dd && DIFFICULTIES[dd]) difficulty = dd; } catch (e) {}
+  function D() { return DIFFICULTIES[difficulty]; }
+
+  // ---- High score (persisted, per difficulty) ---------------------------
+  function bestKey() { return "flutter.best." + difficulty; }
+  function loadBest() { try { return parseInt(localStorage.getItem(bestKey()) || "0", 10) || 0; } catch (e) { return 0; } }
+  let best = loadBest();
   function saveBest(score) {
     if (score > best) {
       best = score;
-      try { localStorage.setItem("flutter.best", String(best)); } catch (e) {}
+      try { localStorage.setItem(bestKey(), String(best)); } catch (e) {}
       return true;
     }
     return false;
@@ -263,12 +312,13 @@
   // from one side. Sizing & species mix scale with the level.
   function spawnWave(player, level) {
     const out = [];
+    const d = D();
     const fromLeft = Math.random() < 0.5;
     const dir = fromLeft ? 1 : -1;
     const edgeX = (s) => fromLeft ? -s * 2 : W + s * 2;
 
     // species mix — more storm clouds the higher you fly
-    const pHunter = clamp(0.16 + level * 0.045, 0.16, 0.5);
+    const pHunter = clamp(d.hunterBase + level * d.hunterScale, d.hunterBase, d.hunterMax);
     const r = Math.random();
     let species;
     if (r < pHunter)            species = "hunter";
@@ -276,7 +326,7 @@
     else if (r < pHunter + 0.32) species = "schooler";
     else                         species = "drifter";
 
-    const speedMul = 1 + (level - 1) * 0.14;
+    const speedMul = (1 + (level - 1) * 0.14) * d.enemySpeed;
 
     if (species === "schooler") {
       const n = 3 + (Math.random() * 4 | 0);
@@ -302,9 +352,9 @@
     } else {
       // drifter — biased mix of prey & threat (leaner on easy prey than before)
       const rr = Math.random();
-      if (rr < 0.48)      size = rand(6, player.size * 0.85);
-      else if (rr < 0.78) size = rand(player.size * 0.9, player.size * 1.6);
-      else                size = rand(player.size * 1.6, player.size * 2.8 + 14);
+      if (rr < d.preyBias)             size = rand(6, player.size * 0.85);
+      else if (rr < d.preyBias + 0.30) size = rand(player.size * 0.9, player.size * 1.6);
+      else                             size = rand(player.size * 1.6, player.size * 2.8 + 14);
       size = clamp(size, 5, Math.max(W, H) * 0.2);
       speed = rand(45, 100) * (1 + 14 / size) * 0.5 * speedMul;
     }
@@ -699,7 +749,7 @@
   function setupLevel(level, score) {
     player = makeFish(START_SIZE, W / 2, H / 2, 1, "#ff6b9d", 0, "player");
     player.pop = 1; player.dashCd = 0; player.dashT = 0;
-    player.dvx = 0; player.dvy = 0; player.vx = 0; player.vy = 0; player.grace = 1.5;
+    player.dvx = 0; player.dvy = 0; player.vx = 0; player.vy = 0; player.grace = D().grace;
     enemies = [];
     game = {
       score: score, time: 0, level: level, goalSize: goalSizeFor(),
@@ -710,7 +760,7 @@
     controlMode = "mouse";
     pointer.x = W / 2; pointer.y = H / 2;
     seedSparkles();
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < D().seedWaves; i++) {
       for (const f of spawnWave(player, level)) enemies.push(f);
     }
   }
@@ -863,7 +913,7 @@
 
     // --- spawn cadence (harder over time and with level) ---
     spawnAcc += dt;
-    const interval = Math.max(0.22, (0.95 - game.time * 0.005) - game.level * 0.045);
+    const interval = Math.max(0.22, (0.95 - game.time * 0.005) - game.level * 0.045) * D().spawn;
     if (spawnAcc > interval && enemies.length < 32) {
       spawnAcc = 0;
       for (const f of spawnWave(player, game.level)) {
@@ -880,7 +930,7 @@
         // cross horizontally, but track the player's height
         f.x += f.dir * f.speed * dt;
         const dy = player.y - f.y;
-        f.y += clamp(dy, -1, 1) * f.homeSpeed * dt + Math.sin(f.wobble) * f.vy * 0.3 * dt;
+        f.y += clamp(dy, -1, 1) * f.homeSpeed * D().hunterTrack * dt + Math.sin(f.wobble) * f.vy * 0.3 * dt;
       } else if (f.species === "darter") {
         // bolt away when the (bigger) player gets close
         const dxp = f.x - player.x, dyp = f.y - player.y;
@@ -904,7 +954,7 @@
       if ((f.dir > 0 && f.x > W + f.size * 2) || (f.dir < 0 && f.x < -f.size * 2)) {
         f.alive = false;
       }
-      if (f.size > player.size * 1.05) {
+      if (f.size > player.size * D().dangerRatio) {
         const d = Math.hypot(f.x - player.x, f.y - player.y) - f.size - player.size;
         if (d < nearestThreat) nearestThreat = d;
       }
@@ -919,7 +969,7 @@
       const dist = Math.hypot(dx, dy);
       const overlap = player.size * 0.7 + f.size * 0.7;
       if (dist < overlap) {
-        if (f.size < player.size * 0.95) {
+        if (f.size < player.size * D().eatRatio) {
           f.alive = false;
           // combo
           game.combo += 1;
@@ -935,7 +985,7 @@
           // grow toward the goal size
           player.size = clamp(player.size + f.size * 0.06, START_SIZE, game.goalSize);
           if (player.size >= game.goalSize - 0.001) { levelComplete(); return; }
-        } else if (f.size > player.size * 1.05) {
+        } else if (f.size > player.size * D().dangerRatio) {
           if (player.grace <= 0) { gameOver(); return; }
         }
       }
@@ -958,7 +1008,7 @@
     drawBackground(t);
     const sorted = enemies.slice().sort((a, b) => a.size - b.size);
     for (const f of sorted) {
-      drawCreature(f, t, { danger: f.size > player.size * 1.05 && threatLevel > 0.05 });
+      drawCreature(f, t, { danger: f.size > player.size * D().dangerRatio && threatLevel > 0.05 });
     }
     drawParticles();
     if (!(player.grace > 0 && Math.floor(t * 12) % 2 === 0)) drawCreature(player, t);
@@ -994,10 +1044,32 @@
     for (const f of sorted0) drawCreature(f, 0);
     drawCreature(player, 0);
   }
-  drawStaticFrame();
   window.addEventListener("resize", () => {
     if (!running && !startScreen.classList.contains("hidden")) drawStaticFrame();
   });
+
+  // ---- Difficulty selector ----------------------------------------------
+  const diffPicker = document.getElementById("diffPicker");
+  const diffDesc = document.getElementById("diffDesc");
+  function refreshDiffUI() {
+    for (const b of diffPicker.querySelectorAll(".diff")) {
+      b.classList.toggle("selected", b.dataset.diff === difficulty);
+    }
+    diffDesc.textContent = D().desc;
+    best = loadBest();
+    bestStartEl.textContent = best;
+  }
+  diffPicker.addEventListener("click", e => {
+    const b = e.target.closest(".diff");
+    if (!b || !DIFFICULTIES[b.dataset.diff]) return;
+    difficulty = b.dataset.diff;
+    try { localStorage.setItem("flutter.diff", difficulty); } catch (err) {}
+    refreshDiffUI();
+    if (!running) drawStaticFrame();  // reflect the new difficulty behind the overlay
+  });
+
+  refreshDiffUI();
+  drawStaticFrame();
 })();
 </script>
 </body>
